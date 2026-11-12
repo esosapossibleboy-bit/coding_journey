@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <title>Esosa's 2D Arcade Jumper</title>
+</head>
+<body style="background: #1e1e2e; color: white; font-family: sans-serif; text-align: center; padding-top: 30px;">
+    <h1>🕹️ Esosa's 2D Arcade Jumper</h1>
+    <p>Press <b>SPACEBAR</b> or click the box to Jump over the red blocks!</p>
+    <h2 id="scoreText">Score: 0</h2>
+    <canvas id="gameCanvas" width="600" height="350" style="background: #11111b; border: 2px solid #89b4fa;"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreText = document.getElementById("scoreText");
+
+        let y = 260;
+        let velocityY = 0;
+        const gravity = 0.8;
+        const floorY = 260;
+
+        let obstacleX = 600;
+        let score = 0;
+        let gameOver = false;
+
+        // Your tested hitbox collision function!
+        function checkCollision(heroY, obsX) {
+            return obsX > 250 && obsX < 320 && heroY > 220;
+        }
+
+        function handleAction() {
+            if (gameOver) {
+                // Reset game on click/spacebar after Game Over!
+                y = floorY;
+                velocityY = 0;
+                obstacleX = 600;
+                score = 0;
+                gameOver = false;
+                scoreText.innerText = "Score: 0";
+            } else if (y === floorY) {
+                velocityY = -15;
+            }
+        }
+
+        window.addEventListener("keydown", (e) => { if (e.code === "Space") handleAction(); });
+        canvas.addEventListener("click", handleAction);
+
+        setInterval(() => {
+            ctx.clearRect(0, 0, 600, 350);
+
+            // Draw green floor
+            ctx.fillStyle = "#a6e3a1";
+            ctx.fillRect(0, 300, 600, 50);
+
+            if (!gameOver) {
+                // 1. Hero jump & gravity physics
+                y = y + velocityY;
+                velocityY = velocityY + gravity;
+                if (y >= floorY) {
+                    y = floorY;
+                    velocityY = 0;
+                }
+
+                // 2. Move red obstacle left & award points
+                obstacleX = obstacleX - 6;
+                if (obstacleX < -30) {
+                    obstacleX = 600;
+                    score = score + 1;
+                    scoreText.innerText = "Score: " + score;
+                }
+
+                // 3. Check tested collision!
+                if (checkCollision(y, obstacleX)) {
+                    gameOver = true;
+                }
+            }
+
+            // Draw blue hero & red obstacle
+            ctx.fillStyle = "#89b4fa";
+            ctx.fillRect(280, y, 40, 40);
+
+            ctx.fillStyle = "#f38ba8";
+            ctx.fillRect(obstacleX, 260, 30, 40);
+
+            if (gameOver) {
+                ctx.fillStyle = "white";
+                ctx.font = "bold 28px sans-serif";
+                ctx.fillText("💥 GAME OVER! Click or Space to Restart", 55, 160);
+            }
+        }, 16);
+    </script>
+</body>
+</html>
