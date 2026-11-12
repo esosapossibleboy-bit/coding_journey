@@ -1,0 +1,10 @@
+class Player:
+    def __init__(self, name):
+        self.name = name
+        self.points = 0
+
+    def add_points(self, amount):
+        self.points += amount
+
+    def get_status(self):
+        return f"{self.name} has {self.points} points!"
