@@ -58,9 +58,17 @@ def render_finance_page(google_client_id: str) -> str:
         let authToken = localStorage.getItem("finance_token") || "", userName = localStorage.getItem("finance_name") || "", editingId = null;
         const headers = () => ({{ "Content-Type": "application/json", "Authorization": "Bearer " + authToken }});
         async function submitAuth(url) {{
-            const res = await fetch(url, {{ method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{ name:nameInput.value||"User", email:emailInput.value, password:passInput.value }}) }});
+            authError.textContent = "";
+            if (!emailInput.value.trim() || passInput.value.length < 6) {{
+                authError.textContent = "Enter a valid email and a password with at least 6 characters.";
+                return;
+            }}
+            const res = await fetch(url, {{ method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{ name:nameInput.value.trim()||"User", email:emailInput.value.trim(), password:passInput.value }}) }});
             const data = await res.json();
-            if (!res.ok) return authError.textContent = data.detail || "Auth failed";
+            if (!res.ok) {{
+                authError.textContent = Array.isArray(data.detail) ? data.detail.map(e => e.msg).join(", ") : (data.detail || "Auth failed");
+                return;
+            }}
             startSession(data);
         }}
         async function handleGoogle(r) {{
