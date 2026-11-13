@@ -1,4 +1,5 @@
 from finance_styles import FINANCE_CSS
+from finance_script import FINANCE_JS
 
 def render_finance_page(google_client_id: str) -> str:
     google_client_id = google_client_id.strip()
@@ -35,8 +36,16 @@ def render_finance_page(google_client_id: str) -> str:
                 <button class="btn-secondary" style="width:auto;margin:0;padding:8px 14px;" onclick="logout()">Log Out</button>
             </div>
             <div class="card" style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-                <label for="monthPicker" style="font-weight:bold;color:#89b4fa;">📅 Select Budget Month & Year:</label>
-                <input id="monthPicker" type="month" style="width:auto;margin:0;" onchange="loadSummary()" />
+                <span style="font-weight:bold;color:#89b4fa;">📅 Select Budget Month & Year:</span>
+                <div style="display:flex;gap:8px;">
+                    <select id="monthSelect" style="width:auto;margin:0;" onchange="loadSummary()">
+                        <option value="01">January</option><option value="02">February</option><option value="03">March</option>
+                        <option value="04">April</option><option value="05">May</option><option value="06">June</option>
+                        <option value="07">July</option><option value="08">August</option><option value="09">September</option>
+                        <option value="10">October</option><option value="11">November</option><option value="12">December</option>
+                    </select>
+                    <select id="yearSelect" style="width:auto;margin:0;" onchange="loadSummary()"></select>
+                </div>
             </div>
             <div class="grid">
                 <div class="card">
@@ -59,60 +68,6 @@ def render_finance_page(google_client_id: str) -> str:
             <div class="card" style="margin-top:16px;"><h3>🧾 Your Private Transactions</h3><div id="txList"></div></div>
         </div>
     </div>
-    <script>
-        let authToken = localStorage.getItem("finance_token") || "", userName = localStorage.getItem("finance_name") || "", editingId = null;
-        monthPicker.value = new Date().toISOString().slice(0, 7);
-        const headers = () => ({{ "Content-Type": "application/json", "Authorization": "Bearer " + authToken }});
-        async function submitAuth(url) {{
-            authError.textContent = "";
-            const pwd = passInput.value;
-            const isStrong = pwd.length >= 8 && /[A-Z]/.test(pwd) && /[a-z]/.test(pwd) && /\d/.test(pwd) && /[^A-Za-z0-9]/.test(pwd);
-            if (!emailInput.value.trim() || !pwd || (url === "/auth/register" && !isStrong)) {{
-                authError.textContent = "Use a valid email and a strong password (8+ chars, uppercase, lowercase, number, and symbol).";
-                return;
-            }}
-            const res = await fetch(url, {{ method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{ name:nameInput.value.trim()||"User", email:emailInput.value.trim(), password:pwd }}) }});
-            const data = await res.json();
-            if (!res.ok) {{
-                authError.textContent = Array.isArray(data.detail) ? data.detail.map(e => e.msg).join(", ") : (data.detail || "Auth failed");
-                return;
-            }}
-            startSession(data);
-        }}
-        async function handleGoogle(r) {{
-            const res = await fetch("/auth/google", {{ method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{credential:r.credential}}) }});
-            const data = await res.json();
-            if (!res.ok) return authError.textContent = data.detail || "Google sign-in failed";
-            startSession(data);
-        }}
-        function startSession(d) {{
-            authToken = d.token; userName = d.name; localStorage.setItem("finance_token", authToken); localStorage.setItem("finance_name", userName);
-            authCard.style.display = "none"; appArea.style.display = "block"; userGreeting.textContent = "🔒 Private Vault: " + userName; loadSummary();
-        }}
-        function logout() {{ authToken = ""; localStorage.clear(); appArea.style.display = "none"; authCard.style.display = "block"; }}
-        async function loadSummary() {{ const res = await fetch(`/summary?month=${{monthPicker.value}}`, {{headers:headers()}}); if (res.status===401) return logout(); renderDashboard(await res.json()); }}
-        function startEdit(tx) {{ editingId = tx.id; formTitle.textContent = "✏️ Edit Entry"; txTitle.value = tx.title; txAmount.value = tx.amount; txKind.value = tx.kind; txCategory.value = tx.category; saveBtn.textContent = "Update Entry"; cancelEditBtn.style.display = "block"; }}
-        function resetForm() {{ editingId = null; formTitle.textContent = "➕ Add Private Entry"; txTitle.value = txAmount.value = txCategory.value = ""; saveBtn.textContent = "Save Entry"; cancelEditBtn.style.display = "none"; }}
-        async function saveTx() {{
-            const res = await fetch(editingId ? `/transactions/${{editingId}}` : "/transactions", {{ method: editingId?"PUT":"POST", headers:headers(), body:JSON.stringify({{ title:txTitle.value, amount:parseFloat(txAmount.value), kind:txKind.value, category:txCategory.value||"General", month_year:monthPicker.value }}) }});
-            const data = await res.json();
-            if (!res.ok) return txError.textContent = "Enter valid text and a positive amount.";
-            resetForm(); renderDashboard(data);
-        }}
-        async function deleteTx(id) {{ const res = await fetch(`/transactions/${{id}}?month=${{monthPicker.value}}`, {{method:"DELETE", headers:headers()}}); if (res.ok) renderDashboard(await res.json()); }}
-        function renderDashboard(data) {{
-            const s = data.summary;
-            balanceText.textContent = `Balance: $${{s.balance.toFixed(2)}}`; totalsText.textContent = `Income: $${{s.income.toFixed(2)}} | Expenses: $${{s.expenses.toFixed(2)}}`; adviceText.textContent = data.advice;
-            catList.replaceChildren(...Object.entries(s.by_category).map(([c, a]) => Object.assign(document.createElement("li"), {{textContent:`${{c}}: $${{a.toFixed(2)}}`}})));
-            txList.replaceChildren(...s.transactions.map(tx => {{
-                const row = Object.assign(document.createElement("div"), {{className:"tx-row"}});
-                const info = Object.assign(document.createElement("span"), {{textContent:`${{tx.title}} (${{tx.category}}): ${{tx.kind==="income"?"+":"-"}}$${{tx.amount.toFixed(2)}}`}});
-                const btns = document.createElement("div");
-                btns.append(Object.assign(document.createElement("button"), {{className:"btn-edit", textContent:"Edit", onclick:()=>startEdit(tx)}}), Object.assign(document.createElement("button"), {{className:"btn-danger", textContent:"Delete", onclick:()=>deleteTx(tx.id)}}));
-                row.append(info, btns); return row;
-            }}));
-        }}
-        if (authToken) startSession({{token:authToken, name:userName}});
-    </script>
+    {FINANCE_JS}
 </body>
 </html>"""
