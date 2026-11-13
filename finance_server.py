@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+from datetime import date
 from typing import Literal, Optional
 import requests as http_requests
 from fastapi import FastAPI, HTTPException, Header, Request
@@ -67,6 +68,7 @@ class TransactionRequest(BaseModel):
     amount: float = Field(gt=0, le=1_000_000_000)
     kind: Literal["income", "expense"]
     category: str = Field(min_length=1, max_length=40)
+    month_year: str = Field(default_factory=lambda: date.today().strftime("%Y-%m"), pattern=r"^\d{4}-\d{2}$")
 
 def get_current_user(authorization: Optional[str]):
     if not authorization or not authorization.startswith("Bearer "):
@@ -165,11 +167,11 @@ def api_admin_users(key: str = ""):
     return stats
 
 @app.get("/summary")
-def api_summary(authorization: Optional[str] = Header(None)):
+def api_summary(month: Optional[str] = None, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
-    summary = get_financial_summary(conn, user["user_id"])
+    summary = get_financial_summary(conn, user["user_id"], month)
     conn.close()
     return {"summary": summary, "advice": generate_budget_advice(summary)}
 
@@ -180,8 +182,8 @@ def api_add_tx(req: TransactionRequest, authorization: Optional[str] = Header(No
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
-    add_transaction(conn, user["user_id"], req.title.strip(), req.amount, req.kind, req.category.strip())
-    summary = get_financial_summary(conn, user["user_id"])
+    add_transaction(conn, user["user_id"], req.title.strip(), req.amount, req.kind, req.category.strip(), req.month_year)
+    summary = get_financial_summary(conn, user["user_id"], req.month_year)
     conn.close()
     return {"summary": summary, "advice": generate_budget_advice(summary)}
 
@@ -190,16 +192,16 @@ def api_edit_tx(tx_id: int, req: TransactionRequest, authorization: Optional[str
     user = get_current_user(authorization)
     conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
-    updated = update_transaction(conn, user["user_id"], tx_id, req.title.strip(), req.amount, req.kind, req.category.strip())
+    updated = update_transaction(conn, user["user_id"], tx_id, req.title.strip(), req.amount, req.kind, req.category.strip(), req.month_year)
     if not updated:
         conn.close()
         raise HTTPException(status_code=404, detail="Transaction not found")
-    summary = get_financial_summary(conn, user["user_id"])
+    summary = get_financial_summary(conn, user["user_id"], req.month_year)
     conn.close()
     return {"summary": summary, "advice": generate_budget_advice(summary)}
 
 @app.delete("/transactions/{tx_id}")
-def api_delete_tx(tx_id: int, authorization: Optional[str] = Header(None)):
+def api_delete_tx(tx_id: int, month: Optional[str] = None, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
@@ -207,6 +209,6 @@ def api_delete_tx(tx_id: int, authorization: Optional[str] = Header(None)):
     if not deleted:
         conn.close()
         raise HTTPException(status_code=404, detail="Transaction not found")
-    summary = get_financial_summary(conn, user["user_id"])
+    summary = get_financial_summary(conn, user["user_id"], month)
     conn.close()
     return {"summary": summary, "advice": generate_budget_advice(summary)}

@@ -2,6 +2,10 @@ import sqlite3
 import hashlib
 import hmac
 import secrets
+from datetime import date
+
+def current_month_str() -> str:
+    return date.today().strftime("%Y-%m")
 
 def hash_password_salted(password: str, salt: str = None) -> str:
     if salt is None:
@@ -35,10 +39,16 @@ def init_finance_db(conn):
             title TEXT,
             amount REAL,
             kind TEXT,
-            category TEXT
+            category TEXT,
+            month_year TEXT
         )
     """)
     conn.commit()
+    try:
+        cursor.execute("ALTER TABLE transactions ADD COLUMN month_year TEXT")
+        conn.commit()
+    except Exception:
+        pass
 
 def register_email_user(conn, email, name, password):
     cursor = conn.cursor()
@@ -60,8 +70,11 @@ def verify_email_user(conn, email, password):
         (email.lower().strip(),),
     )
     row = cursor.fetchone()
-    if row and verify_password_salted(password, row[2]):
-        return row[0], row[1]
+    if not row:
+        return None
+    user_id, name, password_hash = row
+    if verify_password_salted(password, password_hash):
+        return user_id, name
     return None
 
 def register_or_login_google(conn, email, name, google_sub):
@@ -72,7 +85,8 @@ def register_or_login_google(conn, email, name, google_sub):
     )
     row = cursor.fetchone()
     if row:
-        return row[0], row[1]
+        user_id, existing_name = row
+        return user_id, existing_name
     cursor.execute(
         "INSERT INTO finance_users (email, name, google_sub) VALUES (?, ?, ?)",
         (email.lower().strip(), name.strip(), google_sub),
@@ -81,39 +95,40 @@ def register_or_login_google(conn, email, name, google_sub):
     return cursor.lastrowid, name.strip()
 
 def get_user_stats(conn):
-    # Safe admin overview: counts users and lists public metadata WITHOUT password hashes!
     cursor = conn.cursor()
     cursor.execute("SELECT id, name, email, google_sub, created_at FROM finance_users ORDER BY id ASC")
     users = [
         {
-            "id": r[0],
-            "name": r[1],
-            "email": r[2],
-            "auth_type": "Google" if r[3] else "Email",
-            "joined": r[4],
+            "id": uid,
+            "name": name,
+            "email": email,
+            "auth_type": "Google" if google_sub else "Email",
+            "joined": created_at,
         }
-        for r in cursor.fetchall()
+        for uid, name, email, google_sub, created_at in cursor.fetchall()
     ]
     return {"total_users": len(users), "users": users}
 
-def add_transaction(conn, user_id, title, amount, kind, category):
+def add_transaction(conn, user_id, title, amount, kind, category, month_year=None):
+    month_year = month_year or current_month_str()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO transactions (user_id, title, amount, kind, category) VALUES (?, ?, ?, ?, ?)",
-        (user_id, title, amount, kind, category),
+        "INSERT INTO transactions (user_id, title, amount, kind, category, month_year) VALUES (?, ?, ?, ?, ?, ?)",
+        (user_id, title, amount, kind, category, month_year),
     )
     conn.commit()
     return cursor.lastrowid
 
-def update_transaction(conn, user_id, tx_id, title, amount, kind, category):
+def update_transaction(conn, user_id, tx_id, title, amount, kind, category, month_year=None):
+    month_year = month_year or current_month_str()
     cursor = conn.cursor()
     cursor.execute(
         """
         UPDATE transactions
-        SET title = ?, amount = ?, kind = ?, category = ?
+        SET title = ?, amount = ?, kind = ?, category = ?, month_year = ?
         WHERE id = ? AND user_id = ?
         """,
-        (title, amount, kind, category, tx_id, user_id),
+        (title, amount, kind, category, month_year, tx_id, user_id),
     )
     conn.commit()
     return cursor.rowcount > 0
@@ -124,19 +139,33 @@ def delete_transaction(conn, user_id, tx_id):
     conn.commit()
     return cursor.rowcount > 0
 
-def get_user_transactions(conn, user_id):
+def get_user_transactions(conn, user_id, month_year=None):
+    month_year = month_year or current_month_str()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, title, amount, kind, category FROM transactions WHERE user_id = ? ORDER BY id DESC",
-        (user_id,),
+        """
+        SELECT id, title, amount, kind, category, month_year
+        FROM transactions
+        WHERE user_id = ? AND (month_year = ? OR month_year IS NULL)
+        ORDER BY id DESC
+        """,
+        (user_id, month_year),
     )
     return [
-        {"id": r[0], "title": r[1], "amount": r[2], "kind": r[3], "category": r[4]}
-        for r in cursor.fetchall()
+        {
+            "id": tx_id,
+            "title": title,
+            "amount": amount,
+            "kind": kind,
+            "category": category,
+            "month_year": my or month_year,
+        }
+        for tx_id, title, amount, kind, category, my in cursor.fetchall()
     ]
 
-def get_financial_summary(conn, user_id):
-    items = get_user_transactions(conn, user_id)
+def get_financial_summary(conn, user_id, month_year=None):
+    month_year = month_year or current_month_str()
+    items = get_user_transactions(conn, user_id, month_year)
     total_income = sum(tx["amount"] for tx in items if tx["kind"] == "income")
     total_expenses = sum(tx["amount"] for tx in items if tx["kind"] == "expense")
     by_category = {}
@@ -145,6 +174,7 @@ def get_financial_summary(conn, user_id):
             by_category[tx["category"]] = by_category.get(tx["category"], 0.0) + tx["amount"]
 
     return {
+        "month_year": month_year,
         "income": total_income,
         "expenses": total_expenses,
         "balance": total_income - total_expenses,

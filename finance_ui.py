@@ -34,6 +34,10 @@ def render_finance_page(google_client_id: str) -> str:
                 <span id="userGreeting" style="color:#a6e3a1;font-weight:bold;"></span>
                 <button class="btn-secondary" style="width:auto;margin:0;padding:8px 14px;" onclick="logout()">Log Out</button>
             </div>
+            <div class="card" style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                <label for="monthPicker" style="font-weight:bold;color:#89b4fa;">📅 Select Budget Month & Year:</label>
+                <input id="monthPicker" type="month" style="width:auto;margin:0;" onchange="loadSummary()" />
+            </div>
             <div class="grid">
                 <div class="card">
                     <h2 id="balanceText" class="balance">Balance: $0.00</h2>
@@ -57,6 +61,7 @@ def render_finance_page(google_client_id: str) -> str:
     </div>
     <script>
         let authToken = localStorage.getItem("finance_token") || "", userName = localStorage.getItem("finance_name") || "", editingId = null;
+        monthPicker.value = new Date().toISOString().slice(0, 7);
         const headers = () => ({{ "Content-Type": "application/json", "Authorization": "Bearer " + authToken }});
         async function submitAuth(url) {{
             authError.textContent = "";
@@ -85,16 +90,16 @@ def render_finance_page(google_client_id: str) -> str:
             authCard.style.display = "none"; appArea.style.display = "block"; userGreeting.textContent = "🔒 Private Vault: " + userName; loadSummary();
         }}
         function logout() {{ authToken = ""; localStorage.clear(); appArea.style.display = "none"; authCard.style.display = "block"; }}
-        async function loadSummary() {{ const res = await fetch("/summary", {{headers:headers()}}); if (res.status===401) return logout(); renderDashboard(await res.json()); }}
+        async function loadSummary() {{ const res = await fetch(`/summary?month=${{monthPicker.value}}`, {{headers:headers()}}); if (res.status===401) return logout(); renderDashboard(await res.json()); }}
         function startEdit(tx) {{ editingId = tx.id; formTitle.textContent = "✏️ Edit Entry"; txTitle.value = tx.title; txAmount.value = tx.amount; txKind.value = tx.kind; txCategory.value = tx.category; saveBtn.textContent = "Update Entry"; cancelEditBtn.style.display = "block"; }}
         function resetForm() {{ editingId = null; formTitle.textContent = "➕ Add Private Entry"; txTitle.value = txAmount.value = txCategory.value = ""; saveBtn.textContent = "Save Entry"; cancelEditBtn.style.display = "none"; }}
         async function saveTx() {{
-            const res = await fetch(editingId ? `/transactions/${{editingId}}` : "/transactions", {{ method: editingId?"PUT":"POST", headers:headers(), body:JSON.stringify({{ title:txTitle.value, amount:parseFloat(txAmount.value), kind:txKind.value, category:txCategory.value||"General" }}) }});
+            const res = await fetch(editingId ? `/transactions/${{editingId}}` : "/transactions", {{ method: editingId?"PUT":"POST", headers:headers(), body:JSON.stringify({{ title:txTitle.value, amount:parseFloat(txAmount.value), kind:txKind.value, category:txCategory.value||"General", month_year:monthPicker.value }}) }});
             const data = await res.json();
             if (!res.ok) return txError.textContent = "Enter valid text and a positive amount.";
             resetForm(); renderDashboard(data);
         }}
-        async function deleteTx(id) {{ const res = await fetch(`/transactions/${{id}}`, {{method:"DELETE", headers:headers()}}); if (res.ok) renderDashboard(await res.json()); }}
+        async function deleteTx(id) {{ const res = await fetch(`/transactions/${{id}}?month=${{monthPicker.value}}`, {{method:"DELETE", headers:headers()}}); if (res.ok) renderDashboard(await res.json()); }}
         function renderDashboard(data) {{
             const s = data.summary;
             balanceText.textContent = `Balance: $${{s.balance.toFixed(2)}}`; totalsText.textContent = `Income: $${{s.income.toFixed(2)}} | Expenses: $${{s.expenses.toFixed(2)}}`; adviceText.textContent = data.advice;
