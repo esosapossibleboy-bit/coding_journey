@@ -33,6 +33,7 @@ def test_private_multiuser_finance_security(monkeypatch):
     tx_res = client.post("/transactions", headers=esosa_headers, json={"title": "Lunch", "amount": 20, "kind": "expense", "category": "Food"})
     tx_id = tx_res.json()["summary"]["transactions"][0]["id"]
 
+
     # 5. Hacker CANNOT see, edit, or delete Esosa's private budget!
     assert client.get("/summary", headers=hacker_headers).json()["summary"]["balance"] == 0.0
     assert client.put(f"/transactions/{tx_id}", headers=hacker_headers, json={"title": "Stolen", "amount": 999, "kind": "expense", "category": "Food"}).status_code == 404
@@ -52,6 +53,11 @@ def test_private_multiuser_finance_security(monkeypatch):
     stats = client.get("/admin/users?key=secret-admin-key").json()
     assert stats["total_users"] == 2
     assert "password_hash" not in str(stats)
+
+    # 8. Download PDF statement returns valid %PDF bytes
+    pdf_res = client.get("/transactions/pdf?month=2026-11", headers=esosa_headers)
+    assert pdf_res.status_code == 200
+    assert pdf_res.content.startswith(b"%PDF")
 
     if os.path.exists(test_db):
         os.remove(test_db)
