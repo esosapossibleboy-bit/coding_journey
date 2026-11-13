@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import time
 from datetime import date
 from typing import Literal, Optional
 import requests as http_requests
@@ -21,6 +22,7 @@ auth_router = APIRouter()
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 ADMIN_KEY = os.getenv("ADMIN_KEY", "esosa-admin-secret")
 ACTIVE_SESSIONS = {}
+IDLE_TIMEOUT_SECONDS = 600  # 10 minutes of inactivity
 auth_limiter = RateLimiter(max_requests=20)
 
 class RegisterRequest(BaseModel):
@@ -68,11 +70,21 @@ def get_current_user(authorization: Optional[str]):
     session = ACTIVE_SESSIONS.get(token)
     if not session:
         raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+    now_ts = time.time()
+    if now_ts - session["last_active"] > IDLE_TIMEOUT_SECONDS:
+        ACTIVE_SESSIONS.pop(token, None)
+        raise HTTPException(status_code=401, detail="Logged out due to inactivity.")
+    session["last_active"] = now_ts
     return session
 
 def create_session(user_id: int, name: str, currency: str = "$"):
     token = secrets.token_urlsafe(32)
-    ACTIVE_SESSIONS[token] = {"user_id": user_id, "name": name, "currency": currency or "$"}
+    ACTIVE_SESSIONS[token] = {
+        "user_id": user_id,
+        "name": name,
+        "currency": currency or "$",
+        "last_active": time.time(),
+    }
     return {"token": token, "name": name, "currency": currency or "$"}
 
 def get_db():
@@ -122,6 +134,13 @@ def api_google_login(req: GoogleAuthRequest):
     conn.close()
     return create_session(user_id, name, currency)
 
+@auth_router.post("/auth/logout")
+def api_logout(authorization: Optional[str] = Header(None)):
+    if authorization and authorization.startswith("Bearer "):
+        _, token = authorization.split(" ", 1)
+        ACTIVE_SESSIONS.pop(token, None)
+    return {"status": "logged_out"}
+
 @auth_router.put("/auth/currency")
 def api_update_currency(req: CurrencyUpdateRequest, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
@@ -133,9 +152,13 @@ def api_update_currency(req: CurrencyUpdateRequest, authorization: Optional[str]
     return {"currency": req.currency}
 
 @auth_router.get("/admin/users")
-def api_admin_users(key: str = ""):
+def api_admin_users(request: Request, key: str = "", x_admin_key: Optional[str] = Header(None)):
     import finance_server
-    if not secrets.compare_digest(key, finance_server.ADMIN_KEY):
+    ip = request.client.host if request.client else "unknown"
+    if not auth_limiter.allow_request(f"admin:{ip}"):
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
+    provided_key = x_admin_key or key
+    if not secrets.compare_digest(provided_key, finance_server.ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Forbidden")
     conn = get_db()
     init_finance_db(conn)

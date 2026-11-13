@@ -1,6 +1,8 @@
 FINANCE_JS = """
 <script>
     let authToken = localStorage.getItem("finance_token") || "", userName = localStorage.getItem("finance_name") || "", userCurrency = localStorage.getItem("finance_currency") || "$", editingId = null;
+    const IDLE_LIMIT_MS = 10 * 60 * 1000;
+    let idleTimer = null;
     const now = new Date();
     monthSelect.value = String(now.getMonth() + 1).padStart(2, "0");
     for (let y = now.getFullYear() - 3; y <= now.getFullYear() + 3; y++) {
@@ -14,6 +16,20 @@ FINANCE_JS = """
         const formatted = d.toLocaleString("en-GB", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
         return `${formatted} (${tz})`;
     }
+    function resetIdleTimer() {
+        if (!authToken) return;
+        localStorage.setItem("finance_last_active", String(Date.now()));
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => logout("🔒 Auto-locked after 10 minutes of inactivity."), IDLE_LIMIT_MS);
+    }
+    ["click", "touchstart", "keydown", "scroll"].forEach(evt => window.addEventListener(evt, resetIdleTimer, { passive: true }));
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && authToken) {
+            const last = Number(localStorage.getItem("finance_last_active") || Date.now());
+            if (Date.now() - last > IDLE_LIMIT_MS) logout("🔒 Auto-locked after 10 minutes of inactivity.");
+            else resetIdleTimer();
+        }
+    });
     async function submitAuth(url) {
         authError.textContent = "";
         const pwd = passInput.value;
@@ -40,15 +56,21 @@ FINANCE_JS = """
         authToken = d.token; userName = d.name; userCurrency = d.currency || userCurrency;
         localStorage.setItem("finance_token", authToken); localStorage.setItem("finance_name", userName); localStorage.setItem("finance_currency", userCurrency);
         vaultCurrency.value = userCurrency;
-        authCard.style.display = "none"; appArea.style.display = "block"; userGreeting.textContent = "🔒 Private Vault: " + userName; loadSummary();
+        authCard.style.display = "none"; appArea.style.display = "block"; userGreeting.textContent = "🔒 Private Vault: " + userName;
+        resetIdleTimer(); loadSummary();
     }
     async function changeCurrency() {
         userCurrency = vaultCurrency.value; localStorage.setItem("finance_currency", userCurrency);
         await fetch("/auth/currency", { method:"PUT", headers:headers(), body:JSON.stringify({ currency:userCurrency }) });
         loadSummary();
     }
-    function logout() { authToken = ""; localStorage.clear(); appArea.style.display = "none"; authCard.style.display = "block"; }
-    async function loadSummary() { const res = await fetch(`/summary?month=${selectedMonthYear()}`, {headers:headers()}); if (res.status===401) return logout(); renderDashboard(await res.json()); }
+    async function logout(reason = "") {
+        clearTimeout(idleTimer);
+        if (authToken) await fetch("/auth/logout", { method: "POST", headers: headers() }).catch(() => {});
+        authToken = ""; localStorage.clear(); appArea.style.display = "none"; authCard.style.display = "block";
+        authError.textContent = typeof reason === "string" ? reason : "";
+    }
+    async function loadSummary() { const res = await fetch(`/summary?month=${selectedMonthYear()}`, {headers:headers()}); if (res.status===401) return logout("Session expired. Please log in again."); renderDashboard(await res.json()); }
     function startEdit(tx) { editingId = tx.id; formTitle.textContent = "✏️ Edit Entry"; txTitle.value = tx.title; txAmount.value = tx.amount; txKind.value = tx.kind; txCategory.value = tx.category; saveBtn.textContent = "Update Entry"; cancelEditBtn.style.display = "block"; }
     function resetForm() { editingId = null; formTitle.textContent = "➕ Add Private Entry"; txTitle.value = txAmount.value = txCategory.value = ""; saveBtn.textContent = "Save Entry"; cancelEditBtn.style.display = "none"; }
     async function saveTx() {
@@ -82,6 +104,10 @@ FINANCE_JS = """
             row.append(left, btns); return row;
         }));
     }
-    if (authToken) startSession({token:authToken, name:userName, currency:userCurrency});
+    if (authToken) {
+        const last = Number(localStorage.getItem("finance_last_active") || Date.now());
+        if (Date.now() - last > IDLE_LIMIT_MS) logout("🔒 Auto-locked after 10 minutes of inactivity.");
+        else startSession({token:authToken, name:userName, currency:userCurrency});
+    }
 </script>
 """
