@@ -31,16 +31,16 @@ def render_finance_page(google_client_id: str) -> str:
 <body>
     <div class="container">
         <h1>🛡️ Secure Private AI Budget App</h1>
-        <div id="authCard" class="card" style="max-width:440px;margin:20px auto;">
+        <form id="authCard" class="card" style="max-width:440px;margin:20px auto;" autocomplete="off" onsubmit="return false;">
             <h2>🔐 Private Account Access</h2>
-            <input id="nameInput" placeholder="Your Name (for Sign Up)" />
-            <input id="emailInput" type="email" placeholder="Email Address" />
-            <input id="passInput" type="password" placeholder="Strong Password (8+ chars, A-z, 0-9, !@#)" />
+            <input id="nameInput" autocomplete="off" placeholder="Your Name (for Sign Up)" />
+            <input id="emailInput" type="email" autocomplete="off" placeholder="Email Address" />
+            <input id="passInput" type="password" autocomplete="new-password" placeholder="Strong Password (8+ chars, A-z, 0-9, !@#)" />
             <select id="authCurrency">{CURRENCY_OPTIONS}</select>
-            <button onclick="submitAuth('/auth/login')">Log In</button>
-            <button class="btn-secondary" onclick="submitAuth('/auth/register')">Create Private Account</button>
+            <button type="button" onclick="submitAuth('/auth/login')">Log In</button>
+            <button type="button" class="btn-secondary" onclick="submitAuth('/auth/register')">Create Private Account</button>
             {g_btn}<p id="authError" class="error"></p>
-        </div>
+        </form>
 
         <div id="appArea" style="display:none;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">

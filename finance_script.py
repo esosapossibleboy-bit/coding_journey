@@ -56,6 +56,7 @@ FINANCE_JS = """
         authToken = d.token; userName = d.name; userCurrency = d.currency || userCurrency;
         localStorage.setItem("finance_token", authToken); localStorage.setItem("finance_name", userName); localStorage.setItem("finance_currency", userCurrency);
         vaultCurrency.value = userCurrency;
+        nameInput.value = ""; emailInput.value = ""; passInput.value = "";
         authCard.style.display = "none"; appArea.style.display = "block"; userGreeting.textContent = "🔒 Private Vault: " + userName;
         resetIdleTimer(); loadSummary();
     }
@@ -67,7 +68,9 @@ FINANCE_JS = """
     async function logout(reason = "") {
         clearTimeout(idleTimer);
         if (authToken) await fetch("/auth/logout", { method: "POST", headers: headers() }).catch(() => {});
-        authToken = ""; localStorage.clear(); appArea.style.display = "none"; authCard.style.display = "block";
+        authToken = ""; localStorage.clear();
+        nameInput.value = ""; emailInput.value = ""; passInput.value = "";
+        appArea.style.display = "none"; authCard.style.display = "block";
         authError.textContent = typeof reason === "string" ? reason : "";
     }
     async function loadSummary() { const res = await fetch(`/summary?month=${selectedMonthYear()}`, {headers:headers()}); if (res.status===401) return logout("Session expired. Please log in again."); renderDashboard(await res.json()); }
