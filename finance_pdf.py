@@ -4,10 +4,12 @@ def build_statement_pdf(user_name: str, summary: dict) -> bytes:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(0, 10, f"Private Budget Statement - {summary['month_year']}", ln=True)
+    safe_title = f"Private Budget Statement - {summary.get('month_year', '')}".encode("latin-1", "replace").decode("latin-1")
+    pdf.cell(0, 10, safe_title, ln=True)
 
     pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 8, f"Account Holder: {user_name}", ln=True)
+    safe_user = f"Account Holder: {user_name}".encode("latin-1", "replace").decode("latin-1")
+    pdf.cell(0, 8, safe_user, ln=True)
     pdf.cell(
         0,
         8,
@@ -25,9 +27,9 @@ def build_statement_pdf(user_name: str, summary: dict) -> bytes:
     else:
         for tx in summary["transactions"]:
             sign = "+" if tx["kind"] == "income" else "-"
-            safe_line = (
-                f"[{tx['created_at']}] {tx['title']} ({tx['category']}) : {sign}${tx['amount']:.2f}"
-            ).encode("latin-1", "replace").decode("latin-1")
+            when = tx.get("created_at") or tx.get("month_year") or ""
+            raw_line = f"[{when}] {tx['title']} ({tx['category']}) : {sign}${tx['amount']:.2f}"
+            safe_line = raw_line.encode("latin-1", "replace").decode("latin-1")
             pdf.cell(0, 7, safe_line, ln=True)
 
     return bytes(pdf.output())

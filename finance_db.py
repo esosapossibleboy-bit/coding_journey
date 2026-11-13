@@ -2,7 +2,7 @@ import sqlite3
 import hashlib
 import hmac
 import secrets
-from datetime import date
+from datetime import date, datetime
 
 def current_month_str() -> str:
     return date.today().strftime("%Y-%m")
@@ -40,16 +40,18 @@ def init_finance_db(conn):
             amount REAL,
             kind TEXT,
             category TEXT,
-            month_year TEXT
+            month_year TEXT,
+            created_at TEXT
         )
     """)
     conn.commit()
-    try:
-        cursor.execute("ALTER TABLE transactions ADD COLUMN month_year TEXT")
-        conn.commit()
-    except Exception:
-        if hasattr(conn, "rollback"):
-            conn.rollback()
+    for col in ("month_year", "created_at"):
+        try:
+            cursor.execute(f"ALTER TABLE transactions ADD COLUMN {col} TEXT")
+            conn.commit()
+        except Exception:
+            if hasattr(conn, "rollback"):
+                conn.rollback()
 
 def register_email_user(conn, email, name, password):
     cursor = conn.cursor()
@@ -114,10 +116,11 @@ def get_user_stats(conn):
 
 def add_transaction(conn, user_id, title, amount, kind, category, month_year=None):
     month_year = month_year or current_month_str()
+    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO transactions (user_id, title, amount, kind, category, month_year) VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, title, amount, kind, category, month_year),
+        "INSERT INTO transactions (user_id, title, amount, kind, category, month_year, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, title, amount, kind, category, month_year, timestamp),
     )
     conn.commit()
     return cursor.lastrowid
@@ -147,7 +150,7 @@ def get_user_transactions(conn, user_id, month_year=None):
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT id, title, amount, kind, category, month_year
+        SELECT id, title, amount, kind, category, month_year, created_at
         FROM transactions
         WHERE user_id = ? AND (month_year = ? OR month_year IS NULL)
         ORDER BY id DESC
@@ -162,8 +165,9 @@ def get_user_transactions(conn, user_id, month_year=None):
             "kind": kind,
             "category": category,
             "month_year": my or month_year,
+            "created_at": created_at or (my or month_year),
         }
-        for tx_id, title, amount, kind, category, my in cursor.fetchall()
+        for tx_id, title, amount, kind, category, my, created_at in cursor.fetchall()
     ]
 
 def get_financial_summary(conn, user_id, month_year=None):
