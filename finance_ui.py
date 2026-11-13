@@ -1,6 +1,7 @@
 from finance_styles import FINANCE_CSS
 
 def render_finance_page(google_client_id: str) -> str:
+    google_client_id = google_client_id.strip()
     g_script = '<script src="https://google.com" async defer></script>' if google_client_id else ""
     g_btn = (
         '<div id="googleBtnContainer" style="display:flex;justify-content:center;margin-top:14px;min-height:44px;"></div>'
