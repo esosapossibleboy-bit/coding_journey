@@ -1,11 +1,11 @@
 import os
-import sqlite3
 import secrets
 from typing import Literal, Optional
 import requests as http_requests
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from db_adapter import get_db_connection
 from finance_db import (
     init_finance_db,
     register_email_user,
@@ -93,9 +93,12 @@ def api_register(req: RegisterRequest, request: Request):
     ip = request.client.host if request.client else "unknown"
     if not auth_limiter.allow_request(ip):
         raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
-    conn = sqlite3.connect(FINANCE_DB)
+    conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
-    user_id = register_email_user(conn, req.email, req.name, req.password)
+    try:
+        user_id = register_email_user(conn, req.email, req.name, req.password)
+    except Exception:
+        user_id = None
     conn.close()
     if user_id is None:
         raise HTTPException(status_code=400, detail="Email is already registered")
@@ -106,7 +109,7 @@ def api_login(req: LoginRequest, request: Request):
     ip = request.client.host if request.client else "unknown"
     if not auth_limiter.allow_request(ip):
         raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
-    conn = sqlite3.connect(FINANCE_DB)
+    conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
     user = verify_email_user(conn, req.email, req.password)
     conn.close()
@@ -127,7 +130,7 @@ def api_google_login(req: GoogleAuthRequest):
     if GOOGLE_CLIENT_ID and info.get("aud") != GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=401, detail="Google token client mismatch")
 
-    conn = sqlite3.connect(FINANCE_DB)
+    conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
     user_id, name = register_or_login_google(
         conn, info["email"], info.get("name", info["email"].split("@")[0]), info["sub"]
@@ -139,7 +142,7 @@ def api_google_login(req: GoogleAuthRequest):
 def api_admin_users(key: str = ""):
     if not secrets.compare_digest(key, ADMIN_KEY):
         raise HTTPException(status_code=403, detail="Forbidden")
-    conn = sqlite3.connect(FINANCE_DB)
+    conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
     stats = get_user_stats(conn)
     conn.close()
@@ -148,7 +151,7 @@ def api_admin_users(key: str = ""):
 @app.get("/summary")
 def api_summary(authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    conn = sqlite3.connect(FINANCE_DB)
+    conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
     summary = get_financial_summary(conn, user["user_id"])
     conn.close()
@@ -159,7 +162,7 @@ def api_add_tx(req: TransactionRequest, authorization: Optional[str] = Header(No
     user = get_current_user(authorization)
     if not tx_limiter.allow_request(str(user["user_id"])):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    conn = sqlite3.connect(FINANCE_DB)
+    conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
     add_transaction(conn, user["user_id"], req.title.strip(), req.amount, req.kind, req.category.strip())
     summary = get_financial_summary(conn, user["user_id"])
@@ -169,7 +172,7 @@ def api_add_tx(req: TransactionRequest, authorization: Optional[str] = Header(No
 @app.put("/transactions/{tx_id}")
 def api_edit_tx(tx_id: int, req: TransactionRequest, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    conn = sqlite3.connect(FINANCE_DB)
+    conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
     updated = update_transaction(conn, user["user_id"], tx_id, req.title.strip(), req.amount, req.kind, req.category.strip())
     if not updated:
@@ -182,7 +185,7 @@ def api_edit_tx(tx_id: int, req: TransactionRequest, authorization: Optional[str
 @app.delete("/transactions/{tx_id}")
 def api_delete_tx(tx_id: int, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    conn = sqlite3.connect(FINANCE_DB)
+    conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
     deleted = delete_transaction(conn, user["user_id"], tx_id)
     if not deleted:
