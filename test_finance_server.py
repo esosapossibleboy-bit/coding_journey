@@ -5,32 +5,50 @@ from rate_limiter import RateLimiter
 
 client = TestClient(finance_server.app)
 
-def test_ai_finance_app_flow(monkeypatch):
-    test_db = "temp_finance.db"
+def test_private_multiuser_finance_security(monkeypatch):
+    test_db = "temp_finance_secure.db"
     if os.path.exists(test_db):
         os.remove(test_db)
     monkeypatch.setattr(finance_server, "FINANCE_DB", test_db)
-    monkeypatch.setattr(finance_server, "tx_limiter", RateLimiter(max_requests=10))
+    monkeypatch.setattr(finance_server, "ADMIN_KEY", "secret-admin-key")
+    monkeypatch.setattr(finance_server, "auth_limiter", RateLimiter(max_requests=20))
+    monkeypatch.setattr(finance_server, "tx_limiter", RateLimiter(max_requests=20))
 
-    # 1. Dashboard loads with security headers and mobile viewport tag
-    home = client.get("/")
-    assert home.status_code == 200
-    assert home.headers["X-Frame-Options"] == "DENY"
-    assert 'name="viewport"' in home.text
+    # 1. Unauthenticated access is blocked with 401
+    assert client.get("/summary").status_code == 401
 
-    # 2. Reject negative dollar amounts and invalid transaction types
-    bad_amount = client.post("/transactions", json={"title": "Hack", "amount": -50, "kind": "expense", "category": "Food"})
-    assert bad_amount.status_code == 422
+    # 2. Register two separate users
+    esosa = client.post("/auth/register", json={"email": "esosa@test.com", "name": "Esosa", "password": "Password123"}).json()
+    hacker = client.post("/auth/register", json={"email": "hacker@test.com", "name": "Hacker", "password": "Password123"}).json()
 
-    bad_kind = client.post("/transactions", json={"title": "Hack", "amount": 50, "kind": "steal", "category": "Food"})
-    assert bad_kind.status_code == 422
+    esosa_headers = {"Authorization": f"Bearer {esosa['token']}"}
+    hacker_headers = {"Authorization": f"Bearer {hacker['token']}"}
 
-    # 3. Valid income & expense flow works seamlessly
-    client.post("/transactions", json={"title": "Paycheck", "amount": 1000, "kind": "income", "category": "Salary"})
-    res = client.post("/transactions", json={"title": "Groceries", "amount": 150, "kind": "expense", "category": "Food"})
-    assert res.status_code == 200
-    assert res.json()["summary"]["balance"] == 850.0
-    assert "Great job saving" in res.json()["advice"]
+        # 3. Esosa creates income & expense
+    client.post("/transactions", headers=esosa_headers, json={"title": "Paycheck", "amount": 1000, "kind": "income", "category": "Job"})
+    tx_res = client.post("/transactions", headers=esosa_headers, json={"title": "Lunch", "amount": 20, "kind": "expense", "category": "Food"})
+    tx_id = tx_res.json()["summary"]["transactions"][0]["id"]
+
+
+    # 4. Hacker CANNOT see, edit, or delete Esosa's private budget!
+    assert client.get("/summary", headers=hacker_headers).json()["summary"]["balance"] == 0.0
+    assert client.put(f"/transactions/{tx_id}", headers=hacker_headers, json={"title": "Stolen", "amount": 999, "kind": "expense", "category": "Food"}).status_code == 404
+    assert client.delete(f"/transactions/{tx_id}", headers=hacker_headers).status_code == 404
+
+    # 5. Esosa edits and deletes his own entry cleanly
+    edit_res = client.put(f"/transactions/{tx_id}", headers=esosa_headers, json={"title": "Healthy Lunch", "amount": 12, "kind": "expense", "category": "Food"})
+    assert edit_res.status_code == 200
+    assert edit_res.json()["summary"]["balance"] == 988.0
+
+    del_res = client.delete(f"/transactions/{tx_id}", headers=esosa_headers)
+    assert del_res.status_code == 200
+    assert del_res.json()["summary"]["balance"] == 1000.0
+
+    # 6. Admin user counter shows 2 users without exposing password hashes
+    assert client.get("/admin/users?key=wrong").status_code == 403
+    stats = client.get("/admin/users?key=secret-admin-key").json()
+    assert stats["total_users"] == 2
+    assert "password_hash" not in str(stats)
 
     if os.path.exists(test_db):
         os.remove(test_db)

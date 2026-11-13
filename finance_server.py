@@ -1,21 +1,52 @@
+import os
 import sqlite3
-from typing import Literal
-from fastapi import FastAPI, HTTPException, Request
+import secrets
+from typing import Literal, Optional
+import requests as http_requests
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from finance_db import init_finance_db, add_transaction, get_financial_summary
+from finance_db import (
+    init_finance_db,
+    register_email_user,
+    verify_email_user,
+    register_or_login_google,
+    get_user_stats,
+    add_transaction,
+    update_transaction,
+    delete_transaction,
+    get_financial_summary,
+)
+from finance_ui import render_finance_page
 from rate_limiter import RateLimiter
 
-app = FastAPI(title="Esosa's Secure AI Personal Finance App")
+app = FastAPI(title="Esosa's Secure Private Finance App")
 FINANCE_DB = "finance.db"
-tx_limiter = RateLimiter(max_requests=30)
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+ADMIN_KEY = os.getenv("ADMIN_KEY", "esosa-admin-secret")
+
+ACTIVE_SESSIONS = {}
+auth_limiter = RateLimiter(max_requests=20)
+tx_limiter = RateLimiter(max_requests=60)
 
 @app.middleware("http")
-async def add_security_headers(request: Request, call_next):
+async def security_headers(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response
+
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=4, max_length=120)
+    name: str = Field(min_length=1, max_length=60)
+    password: str = Field(min_length=6, max_length=128)
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=4, max_length=120)
+    password: str = Field(min_length=1, max_length=128)
+
+class GoogleAuthRequest(BaseModel):
+    credential: str
 
 class TransactionRequest(BaseModel):
     title: str = Field(min_length=1, max_length=80)
@@ -23,176 +54,140 @@ class TransactionRequest(BaseModel):
     kind: Literal["income", "expense"]
     category: str = Field(min_length=1, max_length=40)
 
+def get_current_user(authorization: Optional[str]):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Please log in first")
+    token = authorization.split(" ", 1)[1]
+    session = ACTIVE_SESSIONS.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+    return session
+
+def create_session(user_id: int, name: str):
+    token = secrets.token_urlsafe(32)
+    ACTIVE_SESSIONS[token] = {"user_id": user_id, "name": name}
+    return {"token": token, "name": name}
+
 def generate_budget_advice(summary):
-    income = summary["income"]
-    expenses = summary["expenses"]
-    balance = summary["balance"]
-    by_cat = summary["by_category"]
-
+    income, expenses, balance, by_cat = (
+        summary["income"],
+        summary["expenses"],
+        summary["balance"],
+        summary["by_category"],
+    )
     if income <= 0:
-        return "Add your first income source to start tracking your budget!"
-
+        return "Add your first income source to start tracking your private budget!"
     top_category = max(by_cat, key=by_cat.get) if by_cat else "None"
-
     if expenses > income:
         return f"⚠️ Warning: Overspending! Trim your {top_category} costs."
     elif balance >= income * 0.2:
         return f"🌟 Great job saving! Top spending category: {top_category}."
-    else:
-        return f"💡 Tip: Reduce {top_category} spending to reach a 20% savings goal."
+    return f"💡 Tip: Reduce {top_category} spending to reach a 20% savings goal."
 
-@app.get("/summary")
-def api_summary():
+@app.get("/", response_class=HTMLResponse)
+def finance_dashboard():
+    return render_finance_page(GOOGLE_CLIENT_ID)
+
+@app.post("/auth/register")
+def api_register(req: RegisterRequest, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    if not auth_limiter.allow_request(ip):
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
     conn = sqlite3.connect(FINANCE_DB)
     init_finance_db(conn)
-    summary = get_financial_summary(conn)
+    user_id = register_email_user(conn, req.email, req.name, req.password)
+    conn.close()
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="Email is already registered")
+    return create_session(user_id, req.name.strip())
+
+@app.post("/auth/login")
+def api_login(req: LoginRequest, request: Request):
+    ip = request.client.host if request.client else "unknown"
+    if not auth_limiter.allow_request(ip):
+        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
+    conn = sqlite3.connect(FINANCE_DB)
+    init_finance_db(conn)
+    user = verify_email_user(conn, req.email, req.password)
+    conn.close()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return create_session(user[0], user[1])
+
+@app.post("/auth/google")
+def api_google_login(req: GoogleAuthRequest):
+    resp = http_requests.get(
+        "https://googleapis.com",
+        params={"id_token": req.credential},
+        timeout=5,
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google sign-in token")
+    info = resp.json()
+    if GOOGLE_CLIENT_ID and info.get("aud") != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=401, detail="Google token client mismatch")
+
+    conn = sqlite3.connect(FINANCE_DB)
+    init_finance_db(conn)
+    user_id, name = register_or_login_google(
+        conn, info["email"], info.get("name", info["email"].split("@")[0]), info["sub"]
+    )
+    conn.close()
+    return create_session(user_id, name)
+
+@app.get("/admin/users")
+def api_admin_users(key: str = ""):
+    if not secrets.compare_digest(key, ADMIN_KEY):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    conn = sqlite3.connect(FINANCE_DB)
+    init_finance_db(conn)
+    stats = get_user_stats(conn)
+    conn.close()
+    return stats
+
+@app.get("/summary")
+def api_summary(authorization: Optional[str] = Header(None)):
+    user = get_current_user(authorization)
+    conn = sqlite3.connect(FINANCE_DB)
+    init_finance_db(conn)
+    summary = get_financial_summary(conn, user["user_id"])
     conn.close()
     return {"summary": summary, "advice": generate_budget_advice(summary)}
 
 @app.post("/transactions")
-def api_add_transaction(req: TransactionRequest, request: Request):
-    client_ip = request.client.host if request.client else "unknown"
-    if not tx_limiter.allow_request(client_ip):
-        raise HTTPException(status_code=429, detail="Too many requests. Please slow down.")
-
+def api_add_tx(req: TransactionRequest, authorization: Optional[str] = Header(None)):
+    user = get_current_user(authorization)
+    if not tx_limiter.allow_request(str(user["user_id"])):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
     conn = sqlite3.connect(FINANCE_DB)
     init_finance_db(conn)
-    add_transaction(conn, req.title.strip(), req.amount, req.kind, req.category.strip())
-    summary = get_financial_summary(conn)
+    add_transaction(conn, user["user_id"], req.title.strip(), req.amount, req.kind, req.category.strip())
+    summary = get_financial_summary(conn, user["user_id"])
     conn.close()
     return {"summary": summary, "advice": generate_budget_advice(summary)}
 
-@app.get("/", response_class=HTMLResponse)
-def finance_dashboard():
-    return """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Esosa's Secure AI Finance App</title>
-        <style>
-            * { box-sizing: border-box; }
-            body {
-                background: #1e1e2e;
-                color: #cdd6f4;
-                font-family: system-ui, -apple-system, sans-serif;
-                margin: 0;
-                padding: 16px;
-            }
-            .container { max-width: 960px; margin: 0 auto; }
-            h1 { font-size: clamp(1.4rem, 4vw, 2rem); text-align: center; color: #89b4fa; }
-            .grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
-                gap: 16px;
-            }
-            .card {
-                background: #11111b;
-                padding: 20px;
-                border-radius: 14px;
-                border: 1px solid #313244;
-            }
-            input, select, button {
-                width: 100%;
-                padding: 12px;
-                margin-top: 10px;
-                border-radius: 8px;
-                border: 1px solid #45475a;
-                background: #181825;
-                color: white;
-                font-size: 16px;
-            }
-            button {
-                background: #89b4fa;
-                color: #11111b;
-                font-weight: bold;
-                border: none;
-                cursor: pointer;
-            }
-            button:hover { opacity: 0.9; }
-            .balance { color: #a6e3a1; font-size: 1.8rem; margin: 0 0 8px 0; }
-            .advice { color: #f9e2af; font-weight: bold; margin-top: 12px; }
-            .error { color: #f38ba8; font-size: 0.9rem; margin-top: 8px; }
-            ul { padding-left: 20px; }
-            li { margin-bottom: 8px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🛡️ Secure AI Personal Finance & Budget App</h1>
-            <div class="grid">
-                <div class="card">
-                    <h2 id="balanceText" class="balance">Balance: $0.00</h2>
-                    <p id="totalsText">Income: $0.00 | Expenses: $0.00</p>
-                    <p id="adviceText" class="advice">Loading AI Coach...</p>
-                    <h3>📊 Spending by Category</h3>
-                    <ul id="catList"></ul>
-                </div>
+@app.put("/transactions/{tx_id}")
+def api_edit_tx(tx_id: int, req: TransactionRequest, authorization: Optional[str] = Header(None)):
+    user = get_current_user(authorization)
+    conn = sqlite3.connect(FINANCE_DB)
+    init_finance_db(conn)
+    updated = update_transaction(conn, user["user_id"], tx_id, req.title.strip(), req.amount, req.kind, req.category.strip())
+    if not updated:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    summary = get_financial_summary(conn, user["user_id"])
+    conn.close()
+    return {"summary": summary, "advice": generate_budget_advice(summary)}
 
-                <div class="card">
-                    <h3>➕ Add Transaction</h3>
-                    <input id="title" maxlength="80" placeholder="Title (e.g. Salary, Groceries)" />
-                    <input id="amount" type="number" step="0.01" min="0.01" placeholder="Amount ($)" />
-                    <select id="kind">
-                        <option value="income">Income (+)</option>
-                        <option value="expense">Expense (-)</option>
-                    </select>
-                    <input id="category" maxlength="40" placeholder="Category (e.g. Salary, Food, Games)" />
-                    <button onclick="submitTx()">Add Entry</button>
-                    <p id="errorText" class="error"></p>
-                </div>
-            </div>
-        </div>
-
-        <script>
-            function renderUI(data) {
-                const s = data.summary;
-                document.getElementById("balanceText").textContent = `Balance: $${s.balance.toFixed(2)}`;
-                document.getElementById("totalsText").textContent = `Income: $${s.income.toFixed(2)} | Expenses: $${s.expenses.toFixed(2)}`;
-                document.getElementById("adviceText").textContent = data.advice;
-
-                // Safe DOM rendering (prevents XSS script injection!)
-                const list = document.getElementById("catList");
-                list.replaceChildren();
-                Object.entries(s.by_category).forEach(([cat, amt]) => {
-                    const li = document.createElement("li");
-                    li.textContent = `${cat}: $${amt.toFixed(2)}`;
-                    list.appendChild(li);
-                });
-            }
-
-            async function loadData() {
-                const res = await fetch("/summary");
-                renderUI(await res.json());
-            }
-
-            async function submitTx() {
-                const errorBox = document.getElementById("errorText");
-                errorBox.textContent = "";
-                const payload = {
-                    title: document.getElementById("title").value,
-                    amount: parseFloat(document.getElementById("amount").value),
-                    kind: document.getElementById("kind").value,
-                    category: document.getElementById("category").value || "General"
-                };
-                const res = await fetch("/transactions", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                });
-                const data = await res.json();
-                if (!res.ok) {
-                    errorBox.textContent = "Invalid input: please enter a positive amount and valid text.";
-                    return;
-                }
-                document.getElementById("title").value = "";
-                document.getElementById("amount").value = "";
-                renderUI(data);
-            }
-
-            loadData();
-        </script>
-    </body>
-    </html>
-    """
+@app.delete("/transactions/{tx_id}")
+def api_delete_tx(tx_id: int, authorization: Optional[str] = Header(None)):
+    user = get_current_user(authorization)
+    conn = sqlite3.connect(FINANCE_DB)
+    init_finance_db(conn)
+    deleted = delete_transaction(conn, user["user_id"], tx_id)
+    if not deleted:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    summary = get_financial_summary(conn, user["user_id"])
+    conn.close()
+    return {"summary": summary, "advice": generate_budget_advice(summary)}
