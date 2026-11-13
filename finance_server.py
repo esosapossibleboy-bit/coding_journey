@@ -5,7 +5,7 @@ from datetime import date
 from typing import Literal, Optional
 import requests as http_requests
 from fastapi import FastAPI, HTTPException, Header, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field, field_validator
 from db_adapter import get_db_connection
 from finance_db import (
@@ -19,6 +19,7 @@ from finance_db import (
     delete_transaction,
     get_financial_summary,
 )
+from finance_pdf import build_statement_pdf
 from finance_ui import render_finance_page
 from rate_limiter import RateLimiter
 
@@ -174,6 +175,22 @@ def api_summary(month: Optional[str] = None, authorization: Optional[str] = Head
     summary = get_financial_summary(conn, user["user_id"], month)
     conn.close()
     return {"summary": summary, "advice": generate_budget_advice(summary)}
+
+@app.get("/transactions/pdf")
+def api_download_pdf(month: Optional[str] = None, authorization: Optional[str] = Header(None)):
+    user = get_current_user(authorization)
+    conn = get_db_connection(FINANCE_DB)
+    init_finance_db(conn)
+    summary = get_financial_summary(conn, user["user_id"], month)
+    conn.close()
+
+    pdf_bytes = build_statement_pdf(user["name"], summary)
+    filename = f"statement_{summary['month_year']}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 @app.post("/transactions")
 def api_add_tx(req: TransactionRequest, authorization: Optional[str] = Header(None)):

@@ -65,7 +65,13 @@ def render_finance_page(google_client_id: str) -> str:
                     <p id="txError" class="error"></p>
                 </div>
             </div>
-            <div class="card" style="margin-top:16px;"><h3>🧾 Your Private Transactions</h3><div id="txList"></div></div>
+            <div class="card" style="margin-top:16px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <h3 style="margin:0;">🧾 Your Private Transactions</h3>
+                    <button class="btn-secondary" style="width:auto;margin:0;padding:8px 14px;" onclick="downloadPDF()">📄 Download PDF</button>
+                </div>
+                <div id="txList" style="margin-top:10px;"></div>
+            </div>
         </div>
     </div>
     {FINANCE_JS}

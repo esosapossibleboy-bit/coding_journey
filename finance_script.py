@@ -45,16 +45,31 @@ FINANCE_JS = """
         resetForm(); renderDashboard(data);
     }
     async function deleteTx(id) { const res = await fetch(`/transactions/${id}?month=${selectedMonthYear()}`, {method:"DELETE", headers:headers()}); if (res.ok) renderDashboard(await res.json()); }
+    async function downloadPDF() {
+        const month = selectedMonthYear();
+        const res = await fetch(`/transactions/pdf?month=${month}`, { headers: headers() });
+        if (!res.ok) return;
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = Object.assign(document.createElement("a"), { href: url, download: `statement_${month}.pdf` });
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    }
     function renderDashboard(data) {
         const s = data.summary;
         balanceText.textContent = `Balance: $${s.balance.toFixed(2)}`; totalsText.textContent = `Income: $${s.income.toFixed(2)} | Expenses: $${s.expenses.toFixed(2)}`; adviceText.textContent = data.advice;
         catList.replaceChildren(...Object.entries(s.by_category).map(([c, a]) => Object.assign(document.createElement("li"), {textContent:`${c}: $${a.toFixed(2)}`})));
         txList.replaceChildren(...s.transactions.map(tx => {
             const row = Object.assign(document.createElement("div"), {className:"tx-row"});
-            const info = Object.assign(document.createElement("span"), {textContent:`${tx.title}} (${tx.category}): ${tx.kind==="income"?"+":"-"}$${tx.amount.toFixed(2)}`});
+            const left = document.createElement("div");
+            const info = Object.assign(document.createElement("div"), {textContent:`${tx.title} (${tx.category}): ${tx.kind==="income"?"+":"-"}$${tx.amount.toFixed(2)}`});
+            const meta = Object.assign(document.createElement("small"), {textContent:`🕒 ${tx.created_at} • Budget: ${tx.month_year}`, style:"color:#a6adc8; display:block; margin-top:4px;"});
+            left.append(info, meta);
             const btns = document.createElement("div");
             btns.append(Object.assign(document.createElement("button"), {className:"btn-edit", textContent:"Edit", onclick:()=>startEdit(tx)}), Object.assign(document.createElement("button"), {className:"btn-danger", textContent:"Delete", onclick:()=>deleteTx(tx.id)}));
-            row.append(info, btns); return row;
+            row.append(left, btns); return row;
         }));
     }
     if (authToken) startSession({token:authToken, name:userName});
