@@ -23,7 +23,7 @@ def render_finance_page(google_client_id: str) -> str:
             <h2>🔐 Private Account Access</h2>
             <input id="nameInput" placeholder="Your Name (for Sign Up)" />
             <input id="emailInput" type="email" placeholder="Email Address" />
-            <input id="passInput" type="password" placeholder="Password (min 6 chars)" />
+            <input id="passInput" type="password" placeholder="Strong Password (8+ chars, A-z, 0-9, !@#)" />
             <button onclick="submitAuth('/auth/login')">Log In</button>
             <button class="btn-secondary" onclick="submitAuth('/auth/register')">Create Private Account</button>
             {g_btn}<p id="authError" class="error"></p>
@@ -60,11 +60,13 @@ def render_finance_page(google_client_id: str) -> str:
         const headers = () => ({{ "Content-Type": "application/json", "Authorization": "Bearer " + authToken }});
         async function submitAuth(url) {{
             authError.textContent = "";
-            if (!emailInput.value.trim() || passInput.value.length < 6) {{
-                authError.textContent = "Enter a valid email and a password with at least 6 characters.";
+            const pwd = passInput.value;
+            const isStrong = pwd.length >= 8 && /[A-Z]/.test(pwd) && /[a-z]/.test(pwd) && /\d/.test(pwd) && /[^A-Za-z0-9]/.test(pwd);
+            if (!emailInput.value.trim() || !pwd || (url === "/auth/register" && !isStrong)) {{
+                authError.textContent = "Use a valid email and a strong password (8+ chars, uppercase, lowercase, number, and symbol).";
                 return;
             }}
-            const res = await fetch(url, {{ method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{ name:nameInput.value.trim()||"User", email:emailInput.value.trim(), password:passInput.value }}) }});
+            const res = await fetch(url, {{ method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{ name:nameInput.value.trim()||"User", email:emailInput.value.trim(), password:pwd }}) }});
             const data = await res.json();
             if (!res.ok) {{
                 authError.textContent = Array.isArray(data.detail) ? data.detail.map(e => e.msg).join(", ") : (data.detail || "Auth failed");

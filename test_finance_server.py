@@ -17,25 +17,28 @@ def test_private_multiuser_finance_security(monkeypatch):
     # 1. Unauthenticated access is blocked with 401
     assert client.get("/summary").status_code == 401
 
-    # 2. Register two separate users
-    esosa = client.post("/auth/register", json={"email": "esosa@test.com", "name": "Esosa", "password": "Password123"}).json()
-    hacker = client.post("/auth/register", json={"email": "hacker@test.com", "name": "Hacker", "password": "Password123"}).json()
+    # 2. Weak passwords without uppercase/numbers/symbols are rejected with 422
+    weak = client.post("/auth/register", json={"email": "weak@test.com", "name": "Weak", "password": "password123"})
+    assert weak.status_code == 422
+
+    # 3. Register two separate users with strong passwords
+    esosa = client.post("/auth/register", json={"email": "esosa@test.com", "name": "Esosa", "password": "Password123!"}).json()
+    hacker = client.post("/auth/register", json={"email": "hacker@test.com", "name": "Hacker", "password": "Password123!"}).json()
 
     esosa_headers = {"Authorization": f"Bearer {esosa['token']}"}
     hacker_headers = {"Authorization": f"Bearer {hacker['token']}"}
 
-        # 3. Esosa creates income & expense
+    # 4. Esosa creates income & expense
     client.post("/transactions", headers=esosa_headers, json={"title": "Paycheck", "amount": 1000, "kind": "income", "category": "Job"})
     tx_res = client.post("/transactions", headers=esosa_headers, json={"title": "Lunch", "amount": 20, "kind": "expense", "category": "Food"})
     tx_id = tx_res.json()["summary"]["transactions"][0]["id"]
 
-
-    # 4. Hacker CANNOT see, edit, or delete Esosa's private budget!
+    # 5. Hacker CANNOT see, edit, or delete Esosa's private budget!
     assert client.get("/summary", headers=hacker_headers).json()["summary"]["balance"] == 0.0
     assert client.put(f"/transactions/{tx_id}", headers=hacker_headers, json={"title": "Stolen", "amount": 999, "kind": "expense", "category": "Food"}).status_code == 404
     assert client.delete(f"/transactions/{tx_id}", headers=hacker_headers).status_code == 404
 
-    # 5. Esosa edits and deletes his own entry cleanly
+    # 6. Esosa edits and deletes his own entry cleanly
     edit_res = client.put(f"/transactions/{tx_id}", headers=esosa_headers, json={"title": "Healthy Lunch", "amount": 12, "kind": "expense", "category": "Food"})
     assert edit_res.status_code == 200
     assert edit_res.json()["summary"]["balance"] == 988.0
@@ -44,7 +47,7 @@ def test_private_multiuser_finance_security(monkeypatch):
     assert del_res.status_code == 200
     assert del_res.json()["summary"]["balance"] == 1000.0
 
-    # 6. Admin user counter shows 2 users without exposing password hashes
+    # 7. Admin user counter shows 2 users without exposing password hashes
     assert client.get("/admin/users?key=wrong").status_code == 403
     stats = client.get("/admin/users?key=secret-admin-key").json()
     assert stats["total_users"] == 2

@@ -1,10 +1,11 @@
 import os
+import re
 import secrets
 from typing import Literal, Optional
 import requests as http_requests
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from db_adapter import get_db_connection
 from finance_db import (
     init_finance_db,
@@ -39,7 +40,20 @@ async def security_headers(request: Request, call_next):
 class RegisterRequest(BaseModel):
     email: str = Field(min_length=4, max_length=120)
     name: str = Field(min_length=1, max_length=60)
-    password: str = Field(min_length=6, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def validate_strong_password(cls, v: str) -> str:
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must include an uppercase letter")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Password must include a lowercase letter")
+        if not re.search(r"\d", v):
+            raise ValueError("Password must include a number")
+        if not re.search(r"[^A-Za-z0-9]", v):
+            raise ValueError("Password must include a special character")
+        return v
 
 class LoginRequest(BaseModel):
     email: str = Field(min_length=4, max_length=120)
@@ -57,7 +71,7 @@ class TransactionRequest(BaseModel):
 def get_current_user(authorization: Optional[str]):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Please log in first")
-    token = authorization.split(" ", 1)[1]
+    _, token = authorization.split(" ", 1)
     session = ACTIVE_SESSIONS.get(token)
     if not session:
         raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
@@ -115,7 +129,8 @@ def api_login(req: LoginRequest, request: Request):
     conn.close()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    return create_session(user[0], user[1])
+    user_id, name = user
+    return create_session(user_id, name)
 
 @app.post("/auth/google")
 def api_google_login(req: GoogleAuthRequest):
@@ -130,10 +145,11 @@ def api_google_login(req: GoogleAuthRequest):
     if GOOGLE_CLIENT_ID and info.get("aud") != GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=401, detail="Google token client mismatch")
 
+    default_name = info["email"].split("@")[0]
     conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
     user_id, name = register_or_login_google(
-        conn, info["email"], info.get("name", info["email"].split("@")[0]), info["sub"]
+        conn, info["email"], info.get("name", default_name), info["sub"]
     )
     conn.close()
     return create_session(user_id, name)
