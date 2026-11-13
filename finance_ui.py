@@ -1,6 +1,17 @@
 from finance_styles import FINANCE_CSS
 from finance_script import FINANCE_JS
 
+CURRENCY_OPTIONS = """
+    <option value="$">$ USD (US Dollar)</option>
+    <option value="€">€ EUR (Euro)</option>
+    <option value="£">£ GBP (British Pound)</option>
+    <option value="₦">₦ NGN (Nigerian Naira)</option>
+    <option value="C$">C$ CAD (Canadian Dollar)</option>
+    <option value="A$">A$ AUD (Australian Dollar)</option>
+    <option value="¥">¥ JPY (Japanese Yen)</option>
+    <option value="₹">₹ INR (Indian Rupee)</option>
+"""
+
 def render_finance_page(google_client_id: str) -> str:
     google_client_id = google_client_id.strip()
     g_script = '<script src="https://google.com" async defer></script>' if google_client_id else ""
@@ -25,15 +36,19 @@ def render_finance_page(google_client_id: str) -> str:
             <input id="nameInput" placeholder="Your Name (for Sign Up)" />
             <input id="emailInput" type="email" placeholder="Email Address" />
             <input id="passInput" type="password" placeholder="Strong Password (8+ chars, A-z, 0-9, !@#)" />
+            <select id="authCurrency">{CURRENCY_OPTIONS}</select>
             <button onclick="submitAuth('/auth/login')">Log In</button>
             <button class="btn-secondary" onclick="submitAuth('/auth/register')">Create Private Account</button>
             {g_btn}<p id="authError" class="error"></p>
         </div>
 
         <div id="appArea" style="display:none;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
                 <span id="userGreeting" style="color:#a6e3a1;font-weight:bold;"></span>
-                <button class="btn-secondary" style="width:auto;margin:0;padding:8px 14px;" onclick="logout()">Log Out</button>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <select id="vaultCurrency" style="width:auto;margin:0;padding:8px;" onchange="changeCurrency()">{CURRENCY_OPTIONS}</select>
+                    <button class="btn-secondary" style="width:auto;margin:0;padding:8px 14px;" onclick="logout()">Log Out</button>
+                </div>
             </div>
             <div class="card" style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
                 <span style="font-weight:bold;color:#89b4fa;">📅 Select Budget Month & Year:</span>
@@ -57,7 +72,7 @@ def render_finance_page(google_client_id: str) -> str:
                 <div class="card">
                     <h3 id="formTitle">➕ Add Private Entry</h3>
                     <input id="txTitle" maxlength="80" placeholder="Title (e.g. Salary, Groceries)" />
-                    <input id="txAmount" type="number" step="0.01" min="0.01" placeholder="Amount ($)" />
+                    <input id="txAmount" type="number" step="0.01" min="0.01" placeholder="Amount" />
                     <select id="txKind"><option value="income">Income (+)</option><option value="expense">Expense (-)</option></select>
                     <input id="txCategory" maxlength="40" placeholder="Category (e.g. Salary, Food)" />
                     <button id="saveBtn" onclick="saveTx()">Save Entry</button>

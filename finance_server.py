@@ -1,23 +1,21 @@
-import os
-import re
-import secrets
-from datetime import date
-from typing import Literal, Optional
-import requests as http_requests
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.responses import HTMLResponse, Response
-from pydantic import BaseModel, Field, field_validator
 from db_adapter import get_db_connection
+from finance_auth import (
+    ADMIN_KEY,
+    GOOGLE_CLIENT_ID,
+    TransactionRequest,
+    auth_limiter,
+    auth_router,
+    get_current_user,
+)
 from finance_db import (
-    init_finance_db,
-    register_email_user,
-    verify_email_user,
-    register_or_login_google,
-    get_user_stats,
     add_transaction,
-    update_transaction,
     delete_transaction,
     get_financial_summary,
+    init_finance_db,
+    update_transaction,
 )
 from finance_pdf import build_statement_pdf
 from finance_ui import render_finance_page
@@ -25,12 +23,8 @@ from rate_limiter import RateLimiter
 
 app = FastAPI(title="Esosa's Secure Private Finance App")
 FINANCE_DB = "finance.db"
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
-ADMIN_KEY = os.getenv("ADMIN_KEY", "esosa-admin-secret")
-
-ACTIVE_SESSIONS = {}
-auth_limiter = RateLimiter(max_requests=20)
 tx_limiter = RateLimiter(max_requests=60)
+app.include_router(auth_router)
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
@@ -38,52 +32,6 @@ async def security_headers(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response
-
-class RegisterRequest(BaseModel):
-    email: str = Field(min_length=4, max_length=120)
-    name: str = Field(min_length=1, max_length=60)
-    password: str = Field(min_length=8, max_length=128)
-
-    @field_validator("password")
-    @classmethod
-    def validate_strong_password(cls, v: str) -> str:
-        if not re.search(r"[A-Z]", v):
-            raise ValueError("Password must include an uppercase letter")
-        if not re.search(r"[a-z]", v):
-            raise ValueError("Password must include a lowercase letter")
-        if not re.search(r"\d", v):
-            raise ValueError("Password must include a number")
-        if not re.search(r"[^A-Za-z0-9]", v):
-            raise ValueError("Password must include a special character")
-        return v
-
-class LoginRequest(BaseModel):
-    email: str = Field(min_length=4, max_length=120)
-    password: str = Field(min_length=1, max_length=128)
-
-class GoogleAuthRequest(BaseModel):
-    credential: str
-
-class TransactionRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=80)
-    amount: float = Field(gt=0, le=1_000_000_000)
-    kind: Literal["income", "expense"]
-    category: str = Field(min_length=1, max_length=40)
-    month_year: str = Field(default_factory=lambda: date.today().strftime("%Y-%m"), pattern=r"^\d{4}-\d{2}$")
-
-def get_current_user(authorization: Optional[str]):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Please log in first")
-    _, token = authorization.split(" ", 1)
-    session = ACTIVE_SESSIONS.get(token)
-    if not session:
-        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
-    return session
-
-def create_session(user_id: int, name: str):
-    token = secrets.token_urlsafe(32)
-    ACTIVE_SESSIONS[token] = {"user_id": user_id, "name": name}
-    return {"token": token, "name": name}
 
 def generate_budget_advice(summary):
     income, expenses, balance, by_cat = (
@@ -105,68 +53,6 @@ def generate_budget_advice(summary):
 def finance_dashboard():
     return render_finance_page(GOOGLE_CLIENT_ID)
 
-@app.post("/auth/register")
-def api_register(req: RegisterRequest, request: Request):
-    ip = request.client.host if request.client else "unknown"
-    if not auth_limiter.allow_request(ip):
-        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
-    conn = get_db_connection(FINANCE_DB)
-    init_finance_db(conn)
-    try:
-        user_id = register_email_user(conn, req.email, req.name, req.password)
-    except Exception:
-        user_id = None
-    conn.close()
-    if user_id is None:
-        raise HTTPException(status_code=400, detail="Email is already registered")
-    return create_session(user_id, req.name.strip())
-
-@app.post("/auth/login")
-def api_login(req: LoginRequest, request: Request):
-    ip = request.client.host if request.client else "unknown"
-    if not auth_limiter.allow_request(ip):
-        raise HTTPException(status_code=429, detail="Too many attempts. Try again later.")
-    conn = get_db_connection(FINANCE_DB)
-    init_finance_db(conn)
-    user = verify_email_user(conn, req.email, req.password)
-    conn.close()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    user_id, name = user
-    return create_session(user_id, name)
-
-@app.post("/auth/google")
-def api_google_login(req: GoogleAuthRequest):
-    resp = http_requests.get(
-        "https://googleapis.com",
-        params={"id_token": req.credential},
-        timeout=5,
-    )
-    if resp.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid Google sign-in token")
-    info = resp.json()
-    if GOOGLE_CLIENT_ID and info.get("aud") != GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=401, detail="Google token client mismatch")
-
-    default_name = info["email"].split("@")[0]
-    conn = get_db_connection(FINANCE_DB)
-    init_finance_db(conn)
-    user_id, name = register_or_login_google(
-        conn, info["email"], info.get("name", default_name), info["sub"]
-    )
-    conn.close()
-    return create_session(user_id, name)
-
-@app.get("/admin/users")
-def api_admin_users(key: str = ""):
-    if not secrets.compare_digest(key, ADMIN_KEY):
-        raise HTTPException(status_code=403, detail="Forbidden")
-    conn = get_db_connection(FINANCE_DB)
-    init_finance_db(conn)
-    stats = get_user_stats(conn)
-    conn.close()
-    return stats
-
 @app.get("/summary")
 def api_summary(month: Optional[str] = None, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
@@ -174,7 +60,7 @@ def api_summary(month: Optional[str] = None, authorization: Optional[str] = Head
     init_finance_db(conn)
     summary = get_financial_summary(conn, user["user_id"], month)
     conn.close()
-    return {"summary": summary, "advice": generate_budget_advice(summary)}
+    return {"summary": summary, "advice": generate_budget_advice(summary), "currency": user["currency"]}
 
 @app.get("/transactions/pdf")
 def api_download_pdf(month: Optional[str] = None, authorization: Optional[str] = Header(None)):
@@ -184,7 +70,7 @@ def api_download_pdf(month: Optional[str] = None, authorization: Optional[str] =
     summary = get_financial_summary(conn, user["user_id"], month)
     conn.close()
 
-    pdf_bytes = build_statement_pdf(user["name"], summary)
+    pdf_bytes = build_statement_pdf(user["name"], summary, user["currency"])
     filename = f"statement_{summary['month_year']}.pdf"
     return Response(
         content=pdf_bytes,
@@ -199,10 +85,10 @@ def api_add_tx(req: TransactionRequest, authorization: Optional[str] = Header(No
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     conn = get_db_connection(FINANCE_DB)
     init_finance_db(conn)
-    add_transaction(conn, user["user_id"], req.title.strip(), req.amount, req.kind, req.category.strip(), req.month_year)
+    add_transaction(conn, user["user_id"], req.title.strip(), req.amount, req.kind, req.category.strip(), req.month_year, req.client_timestamp)
     summary = get_financial_summary(conn, user["user_id"], req.month_year)
     conn.close()
-    return {"summary": summary, "advice": generate_budget_advice(summary)}
+    return {"summary": summary, "advice": generate_budget_advice(summary), "currency": user["currency"]}
 
 @app.put("/transactions/{tx_id}")
 def api_edit_tx(tx_id: int, req: TransactionRequest, authorization: Optional[str] = Header(None)):
@@ -215,7 +101,7 @@ def api_edit_tx(tx_id: int, req: TransactionRequest, authorization: Optional[str
         raise HTTPException(status_code=404, detail="Transaction not found")
     summary = get_financial_summary(conn, user["user_id"], req.month_year)
     conn.close()
-    return {"summary": summary, "advice": generate_budget_advice(summary)}
+    return {"summary": summary, "advice": generate_budget_advice(summary), "currency": user["currency"]}
 
 @app.delete("/transactions/{tx_id}")
 def api_delete_tx(tx_id: int, month: Optional[str] = None, authorization: Optional[str] = Header(None)):
@@ -228,4 +114,4 @@ def api_delete_tx(tx_id: int, month: Optional[str] = None, authorization: Option
         raise HTTPException(status_code=404, detail="Transaction not found")
     summary = get_financial_summary(conn, user["user_id"], month)
     conn.close()
-    return {"summary": summary, "advice": generate_budget_advice(summary)}
+    return {"summary": summary, "advice": generate_budget_advice(summary), "currency": user["currency"]}

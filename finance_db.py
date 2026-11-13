@@ -29,6 +29,7 @@ def init_finance_db(conn):
             name TEXT,
             password_hash TEXT,
             google_sub TEXT UNIQUE,
+            currency TEXT DEFAULT '$',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -45,21 +46,21 @@ def init_finance_db(conn):
         )
     """)
     conn.commit()
-    for col in ("month_year", "created_at"):
+    for table, col in (("finance_users", "currency"), ("transactions", "month_year"), ("transactions", "created_at")):
         try:
-            cursor.execute(f"ALTER TABLE transactions ADD COLUMN {col} TEXT")
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
             conn.commit()
         except Exception:
             if hasattr(conn, "rollback"):
                 conn.rollback()
 
-def register_email_user(conn, email, name, password):
+def register_email_user(conn, email, name, password, currency="$"):
     cursor = conn.cursor()
     secure_hash = hash_password_salted(password)
     try:
         cursor.execute(
-            "INSERT INTO finance_users (email, name, password_hash) VALUES (?, ?, ?)",
-            (email.lower().strip(), name.strip(), secure_hash),
+            "INSERT INTO finance_users (email, name, password_hash, currency) VALUES (?, ?, ?, ?)",
+            (email.lower().strip(), name.strip(), secure_hash, currency or "$"),
         )
         conn.commit()
         return cursor.lastrowid
@@ -71,52 +72,58 @@ def register_email_user(conn, email, name, password):
 def verify_email_user(conn, email, password):
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, name, password_hash FROM finance_users WHERE email = ?",
+        "SELECT id, name, password_hash, currency FROM finance_users WHERE email = ?",
         (email.lower().strip(),),
     )
     row = cursor.fetchone()
     if not row:
         return None
-    user_id, name, password_hash = row
+    user_id, name, password_hash, currency = row
     if verify_password_salted(password, password_hash):
-        return user_id, name
+        return user_id, name, currency or "$"
     return None
 
-def register_or_login_google(conn, email, name, google_sub):
+def register_or_login_google(conn, email, name, google_sub, currency="$"):
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, name FROM finance_users WHERE google_sub = ? OR email = ?",
+        "SELECT id, name, currency FROM finance_users WHERE google_sub = ? OR email = ?",
         (google_sub, email.lower().strip()),
     )
     row = cursor.fetchone()
     if row:
-        user_id, existing_name = row
-        return user_id, existing_name
+        user_id, existing_name, existing_currency = row
+        return user_id, existing_name, existing_currency or "$"
     cursor.execute(
-        "INSERT INTO finance_users (email, name, google_sub) VALUES (?, ?, ?)",
-        (email.lower().strip(), name.strip(), google_sub),
+        "INSERT INTO finance_users (email, name, google_sub, currency) VALUES (?, ?, ?, ?)",
+        (email.lower().strip(), name.strip(), google_sub, currency or "$"),
     )
     conn.commit()
-    return cursor.lastrowid, name.strip()
+    return cursor.lastrowid, name.strip(), currency or "$"
+
+def update_user_currency(conn, user_id, currency):
+    cursor = conn.cursor()
+    cursor.execute("UPDATE finance_users SET currency = ? WHERE id = ?", (currency, user_id))
+    conn.commit()
 
 def get_user_stats(conn):
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, email, google_sub, created_at FROM finance_users ORDER BY id ASC")
+    cursor.execute("SELECT id, name, email, google_sub, currency, created_at FROM finance_users ORDER BY id ASC")
     users = [
         {
             "id": uid,
             "name": name,
             "email": email,
             "auth_type": "Google" if google_sub else "Email",
+            "currency": currency or "$",
             "joined": created_at,
         }
-        for uid, name, email, google_sub, created_at in cursor.fetchall()
+        for uid, name, email, google_sub, currency, created_at in cursor.fetchall()
     ]
     return {"total_users": len(users), "users": users}
 
-def add_transaction(conn, user_id, title, amount, kind, category, month_year=None):
+def add_transaction(conn, user_id, title, amount, kind, category, month_year=None, client_timestamp=None):
     month_year = month_year or current_month_str()
-    timestamp = datetime.now().strftime("%d %b %Y, %H:%M")
+    timestamp = client_timestamp or datetime.now().strftime("%d %b %Y, %H:%M")
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO transactions (user_id, title, amount, kind, category, month_year, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
