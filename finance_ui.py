@@ -3,10 +3,8 @@ from finance_styles import FINANCE_CSS
 def render_finance_page(google_client_id: str) -> str:
     g_script = '<script src="https://google.com" async defer></script>' if google_client_id else ""
     g_btn = (
-        f'<div id="g_id_onload" data-client_id="{google_client_id}" data-callback="handleGoogle" data-auto_prompt="false"></div>'
-        '<div style="display:flex;justify-content:center;margin-top:14px;">'
-        '<div class="g_id_signin" data-type="standard" data-size="large" data-theme="outline" data-text="continue_with" data-shape="rectangular"></div>'
-        '</div>'
+        '<div id="googleBtnContainer" style="display:flex;justify-content:center;margin-top:14px;min-height:44px;"></div>'
+        f'<script>window.addEventListener("load", () => {{ if (window.google) {{ google.accounts.id.initialize({{ client_id: "{google_client_id}", callback: handleGoogle }}); google.accounts.id.renderButton(document.getElementById("googleBtnContainer"), {{ theme: "outline", size: "large", text: "continue_with", width: 320 }}); }} }});</script>'
         if google_client_id
         else '<p style="font-size:0.85rem;color:#a6adc8;">Google Sign-In ready via GOOGLE_CLIENT_ID.</p>'
     )
