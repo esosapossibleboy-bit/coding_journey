@@ -18,7 +18,6 @@ class PostgresCursorWrapper:
         self.rowcount = 0
 
     def execute(self, sql: str, params=()):
-        # Translate SQLite syntax to PostgreSQL syntax automatically
         pg_sql = (
             sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
             .replace("?", "%s")
@@ -48,6 +47,9 @@ class PostgresConnectionWrapper:
 
     def commit(self):
         self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
 
     def close(self):
         self._conn.close()

@@ -48,7 +48,8 @@ def init_finance_db(conn):
         cursor.execute("ALTER TABLE transactions ADD COLUMN month_year TEXT")
         conn.commit()
     except Exception:
-        pass
+        if hasattr(conn, "rollback"):
+            conn.rollback()
 
 def register_email_user(conn, email, name, password):
     cursor = conn.cursor()
@@ -60,7 +61,9 @@ def register_email_user(conn, email, name, password):
         )
         conn.commit()
         return cursor.lastrowid
-    except sqlite3.IntegrityError:
+    except Exception:
+        if hasattr(conn, "rollback"):
+            conn.rollback()
         return None
 
 def verify_email_user(conn, email, password):
